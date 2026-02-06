@@ -1,0 +1,298 @@
+<!DOCTYPE html><html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WEJOY VOTE PLATFORM</title>
+<style>
+  body{font-family:Arial,sans-serif;background:#f4f6f8;margin:0;padding:10px}
+  .container{max-width:700px;margin:auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.1)}
+  h1,h2{text-align:center}
+  input,select,button{width:100%;padding:10px;margin:5px 0;border-radius:5px;border:1px solid #ccc}
+  button{background:#007bff;color:#fff;border:none;cursor:pointer}
+  button:disabled{background:#aaa}
+  .hidden{display:none}
+  .event, .candidate{border:1px solid #ddd;padding:10px;margin:10px 0;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:space-between}
+  .event img,.candidate img{width:50px;height:50px;border-radius:5px;margin-right:10px;object-fit:cover}
+  .active{background:#e8f0ff;border-color:#007bff}
+  .result-bar{height:20px;background:#007bff;border-radius:5px;margin:2px 0}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>WEJOY VOTE PLATFORM</h1>
+<div id="loginSection">
+<h2>Admin / Event Owner Login</h2>
+<input id="username" placeholder="Username" />
+<input id="password" placeholder="Password" type="password" />
+<button onclick="login()">Login</button>
+<p id="loginMsg" style="color:red"></p>
+</div><div id="masterDashboard" class="hidden">
+<h2>Master Admin Dashboard</h2>
+<button onclick="showAllEvents()">View All Events</button>
+<div id="commissionDisplay"></div>
+<h3>Add New Event</h3>
+<input id="newEventName" placeholder="Event Name" />
+<input id="newEventPrice" type="number" placeholder="Vote Price (₵)" />
+<input type="file" id="newEventImage" accept="image/*" />
+<select id="selectOwner"></select>
+<button onclick="addEvent()">Add Event</button>
+<div id="eventsContainer"></div>
+</div><div id="ownerDashboard" class="hidden">
+<h2>Event Owner Dashboard</h2>
+<h3>Add New Event</h3>
+<input id="ownerNewEventName" placeholder="Event Name" />
+<input id="ownerNewEventPrice" type="number" placeholder="Vote Price (₵)" />
+<input type="file" id="ownerEventImage" accept="image/*" />
+<button onclick="ownerAddEvent()">Add Event</button>
+<div id="ownerEvents"></div>
+</div><div id="votingSection" class="hidden">
+<h2 id="eventTitle"></h2>
+<div id="candidatesContainer"></div>
+<input id="newCandidateName" placeholder="Add Candidate Name" />
+<input type="file" id="newCandidateImage" accept="image/*" />
+<button onclick="addCandidate()">Add Candidate</button>
+<input id="voteCount" type="number" min="1" placeholder="Enter number of votes" />
+<button id="voteButton" onclick="payAndVote()">Vote</button>
+<p id="voteStatus" style="color:red"></p>
+<div id="resultsContainer"></div>
+</div><script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script><script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script><script src="https://js.paystack.co/v1/inline.js"></script><script>
+const firebaseConfig={
+apiKey:"AIzaSyAC4eYNYQGp1jtNPMgkQ_mENgBH2V3ERIg",
+authDomain:"wejoy-40eb6.firebaseapp.com",
+databaseURL:"https://wejoy-40eb6-default-rtdb.firebaseio.com",
+projectId:"wejoy-40eb6",
+storageBucket:"wejoy-40eb6.appspot.com",
+messagingSenderId:"953054919092",
+appId:"1:953054919092:web:d1fb1cb51007e8dab71ae1"
+};
+firebase.initializeApp(firebaseConfig);
+const db=firebase.database();
+const storage=firebase.storage();
+
+let currentUser=null;
+let currentUserUID=null;
+let selectedEvent=null;
+let selectedCandidate=null;
+
+function login(){
+  const user=document.getElementById('username').value.trim();
+  const pass=document.getElementById('password').value;
+  const msg=document.getElementById('loginMsg');
+  msg.innerText='';
+
+  if(user==='Wejoy Vote' && pass==='Smile,wecare'){
+    currentUser='master';
+    document.getElementById('loginSection').classList.add('hidden');
+    document.getElementById('masterDashboard').classList.remove('hidden');
+    loadOwners();
+    loadCommission();
+    return;
+  }
+
+  db.ref('admins').once('value').then(snap=>{
+    const data=snap.val()||{};
+    for(let uid in data){
+      if(data[uid].username===user && data[uid].password===pass){
+        currentUser='owner';
+        currentUserUID=uid;
+        document.getElementById('loginSection').classList.add('hidden');
+        document.getElementById('ownerDashboard').classList.remove('hidden');
+        loadOwnerEvents();
+        return;
+      }
+    }
+    msg.innerText='Invalid credentials';
+  });
+}
+
+async function uploadImage(file){
+  if(!file) return '';
+  const storageRef=storage.ref('images/'+Date.now()+'_'+file.name);
+  const snapshot=await storageRef.put(file);
+  const url=await snapshot.ref.getDownloadURL();
+  return url;
+}
+
+function loadOwners(){
+  db.ref('admins').once('value').then(snap=>{
+    const data=snap.val()||{};
+    const select=document.getElementById('selectOwner');
+    select.innerHTML='';
+    for(let uid in data){
+      if(data[uid].role==='owner'){
+        const option=document.createElement('option');
+        option.value=uid;
+        option.innerText=data[uid].username;
+        select.appendChild(option);
+      }
+    }
+  });
+}
+
+async function addEvent(){
+  const title=document.getElementById('newEventName').value.trim();
+  const price=parseInt(document.getElementById('newEventPrice').value);
+  const owner=document.getElementById('selectOwner').value;
+  const file=document.getElementById('newEventImage').files[0];
+  if(!title || !price || !owner) return alert('Enter all fields');
+  const imageUrl=await uploadImage(file);
+  const eventRef=db.ref('events').push();
+  eventRef.set({title:title,pricePerVote:price,status:'open',owner:owner,image:imageUrl});
+  document.getElementById('newEventName').value='';
+  document.getElementById('newEventPrice').value='';
+  document.getElementById('newEventImage').value='';
+  loadOwners();
+}
+
+async function ownerAddEvent(){
+  const title=document.getElementById('ownerNewEventName').value.trim();
+  const price=parseInt(document.getElementById('ownerNewEventPrice').value);
+  const file=document.getElementById('ownerEventImage').files[0];
+  if(!title || !price) return alert('Enter all fields');
+  const imageUrl=await uploadImage(file);
+  const eventRef=db.ref('events').push();
+  eventRef.set({title:title,pricePerVote:price,status:'open',owner:currentUserUID,image:imageUrl});
+  document.getElementById('ownerNewEventName').value='';
+  document.getElementById('ownerNewEventPrice').value='';
+  document.getElementById('ownerEventImage').value='';
+  loadOwnerEvents();
+}
+
+function toggleEventStatus(eventID,currentStatus){
+  const newStatus=currentStatus==='open'?'closed':'open';
+  db.ref('events/'+eventID+'/status').set(newStatus);
+}
+
+function selectEvent(id,eventData){
+  selectedEvent=id;
+  document.getElementById('votingSection').classList.remove('hidden');
+  document.getElementById('eventTitle').innerText=eventData.title;
+  if(eventData.status==='closed'){
+    document.getElementById('voteButton').disabled=true;
+    document.getElementById('voteStatus').innerText='Voting Closed';
+  }else{
+    document.getElementById('voteButton').disabled=false;
+    document.getElementById('voteStatus').innerText='';
+  }
+  loadCandidates(id);
+}
+
+async function addCandidate(){
+  const name=document.getElementById('newCandidateName').value.trim();
+  const file=document.getElementById('newCandidateImage').files[0];
+  if(!name) return alert('Enter candidate name');
+  const imageUrl=await uploadImage(file);
+  const candidateRef=db.ref(`events/${selectedEvent}/candidates`).push();
+  candidateRef.set({name:name,votes:0,image:imageUrl});
+  document.getElementById('newCandidateName').value='';
+  document.getElementById('newCandidateImage').value='';
+}
+
+function loadCandidates(eventID){
+  db.ref(`events/${eventID}/candidates`).on('value',snap=>{
+    const data=snap.val()||{};
+    const wrap=document.getElementById('candidatesContainer');
+    wrap.innerHTML='';
+    for(let cid in data){
+      const div=document.createElement('div');
+      div.className='candidate';
+      const img=document.createElement('img');
+      img.src=data[cid].image||'';
+      const span=document.createElement('span');
+      span.innerText=data[cid].name;
+      div.appendChild(img);
+      div.appendChild(span);
+      div.onclick=()=>selectCandidate(cid,div);
+      wrap.appendChild(div);
+    }
+    showResults(eventID);
+  });
+}
+
+function selectCandidate(id,el){
+  selectedCandidate=id;
+  document.querySelectorAll('.candidate').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function payAndVote(){
+  if(!selectedCandidate) return alert('Select a candidate');
+  let votes=parseInt(document.getElementById('voteCount').value);
+  if(!votes || votes<1) votes=1;
+  db.ref(`events/${selectedEvent}`).once('value').then(snap=>{
+    const eventData=snap.val();
+    if(eventData.status==='closed') return alert('Voting Closed');
+    const amount=votes*(eventData.pricePerVote||100);
+    const handler=PaystackPop.setup({
+      key:'pk_live_9874993076951c56557d8643d1052089e2ab9e51',
+      email:'voter@wejoyvote.com',
+      amount:amount,
+      currency:'GHS',
+      callback:function(response){
+        db.ref('transactions/'+response.reference).once('value').then(tx=>{
+          if(tx.exists()) return alert('Transaction already recorded');
+          db.ref('transactions/'+response.reference).set({eventID:selectedEvent,candidateID:selectedCandidate,votes:votes,amount:amount,reference:response.reference});
+          db.ref(`events/${selectedEvent}/candidates/${selectedCandidate}/votes`).transaction(v=>(v||0)+votes);
+          alert('Vote successful! Reference: '+response.reference);
+          document.getElementById('voteCount').value='';
+        });
+      },
+      onClose:function(){alert('Payment closed');}
+    });
+    handler.openIframe();
+  });
+}
+
+function showResults(eventID){
+  db.ref(`events/${eventID}/candidates`).once('value').then(snap=>{
+    const data=snap.val()||{};
+    const wrap=document.getElementById('resultsContainer');
+    wrap.innerHTML='<h3>Results</h3>';
+    let totalVotes=Object.values(data).reduce((a,c)=>a+(c.votes||0),0);
+    for(let cid in data){
+      const percent=totalVotes?Math.round((data[cid].votes||0)/totalVotes*100):0;
+      wrap.innerHTML+=`<div style='display:flex;align-items:center;'><img src='${data[cid].image||''}' style='width:50px;height:50px;border-radius:5px;margin-right:10px'><p>${data[cid].name}: ${data[cid].votes||0} (${percent}%)</p></div><div class='result-bar' style='width:${percent}%'></div>`;
+    }
+  });
+}
+
+function loadOwnerEvents(){
+  db.ref('events').orderByChild('owner').equalTo(currentUserUID).on('value',snap=>{
+    const data=snap.val()||{};
+    const wrap=document.getElementById('ownerEvents');
+    wrap.innerHTML='';
+    for(let id in data){
+      const div=document.createElement('div');
+      div.className='event';
+      const img=document.createElement('img');
+      img.src=data[id].image||'';
+      const span=document.createElement('span');
+      span.innerText=`${data[id].title} | Price: ₵${data[id].pricePerVote} | Status: ${data[id].status}`;
+      const btn=document.createElement('button');
+      btn.innerText=data[id].status==='open'?'Close':'Open';
+      btn.onclick=()=>toggleEventStatus(id,data[id].status);
+      div.appendChild(img);
+      div.appendChild(span);
+      div.appendChild(btn);
+      div.onclick=()=>selectEvent(id,data[id]);
+      wrap.appendChild(div);
+    }
+  });
+}
+
+function loadCommission(){
+  db.ref('events').once('value').then(snap=>{
+    const data=snap.val()||{};
+    let totalCommission=0;
+    for(let id in data){
+      const votesSum=Object.values(data[id].candidates||{}).reduce((a,c)=>a+(c.votes||0),0);
+      const revenue=votesSum*(data[id].pricePerVote||1);
+      const commission=Math.round(revenue*0.10);
+      totalCommission+=commission;
+    }
+    document.getElementById('commissionDisplay').innerText=`Total Commission: ₵${totalCommission}`;
+  });
+}
+
+</script></body>
+</html>
